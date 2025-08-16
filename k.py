@@ -39,9 +39,9 @@ import threading
 # Set up environment variables from Streamlit secrets
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGSMITH_API_KEY"] = st.secrets["LANGSMITH_API_KEY"]
-os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
-os.environ["HF_TOKEN"] = st.secrets["HF_TOKEN"]
+os.environ["LANGSMITH_API_KEY"] = st.secrets.get("LANGSMITH_API_KEY", "")
+os.environ["GROQ_API_KEY"] = st.secrets.get("GROQ_API_KEY", "")
+os.environ["HF_TOKEN"] = st.secrets.get("HF_TOKEN", "")
 
 # PDF Chat Constants
 DEFAULT_MODEL = "Llama3-70b-8192"
@@ -56,8 +56,8 @@ EMAIL_CONFIG = {
     "provider": "gmail",
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,
-    "email": st.secrets["EMAIL_USER"],
-    "password": st.secrets["EMAIL_PASSWORD"],
+    "email": st.secrets.get("EMAIL_USER", ""),
+    "password": st.secrets.get("EMAIL_PASSWORD", ""),
     "enabled": True
 }
 
@@ -332,6 +332,7 @@ def scrape_website(urls):
 # -----------------------------
 # Create QA Chain with Progress
 # -----------------------------
+@st.cache_resource(show_spinner=False)
 def create_qa_chain():
     # Scrape website content
     raw_text = scrape_website(URLS)
@@ -340,12 +341,15 @@ def create_qa_chain():
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_text(raw_text)
     
-    # Create embeddings with explicit device setting
+    # Create embeddings
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_name=EMBEDDING_MODEL,
         model_kwargs={'device': 'cpu'},  # Explicitly set to CPU
         encode_kwargs={'normalize_embeddings': True}
     )
+    
+    # Create vector store
+    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
     
     # Load Groq LLM
     llm = ChatGroq(
@@ -1335,6 +1339,7 @@ else:
                     st.session_state.qa_chain = create_qa_chain()
                 except Exception as e:
                     st.error(f"Failed to initialize AI assistant: {str(e)}")
+                    st.session_state.qa_chain = None
         
         # Display chat history directly without container
         for chat in st.session_state.chat_history:
@@ -1359,12 +1364,15 @@ else:
                 # Get AI response
                 with st.spinner("🤖 Thinking..."):
                     try:
-                        result = st.session_state.qa_chain(user_message)
-                        ai_response = result["result"]
-                        
-                        # Format response with bullet points if appropriate
-                        if ":" in ai_response or "- " in ai_response:
-                            ai_response = ai_response.replace("\n", "<br>")
+                        if 'qa_chain' in st.session_state and st.session_state.qa_chain is not None:
+                            result = st.session_state.qa_chain(user_message)
+                            ai_response = result["result"]
+                            
+                            # Format response with bullet points if appropriate
+                            if ":" in ai_response or "- " in ai_response:
+                                ai_response = ai_response.replace("\n", "<br>")
+                        else:
+                            ai_response = "AI assistant is not available. Please try again later."
                     except Exception as e:
                         ai_response = f"I'm sorry, I encountered an error. Please try again. ({str(e)})"
                 
