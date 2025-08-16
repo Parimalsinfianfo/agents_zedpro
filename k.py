@@ -1,4 +1,4 @@
-# app.py (j.py version - Recommended Production Version)
+# app.py (Optimized Production Version)
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -30,6 +30,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.document_loaders import PyPDFLoader, PyMuPDFLoader
 import tempfile
+import concurrent.futures
+import threading
 
 # -----------------------------
 # Configuration
@@ -72,7 +74,7 @@ URLS = [
 # Database Setup
 # -----------------------------
 def init_database():
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     
     tables = [
@@ -155,7 +157,7 @@ def init_database():
     conn.close()
 
 def init_company_data():
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     
     cursor.execute("SELECT COUNT(*) FROM company_data")
@@ -178,7 +180,7 @@ def init_company_data():
 # Authentication Functions
 # -----------------------------
 def create_user(username, password, role='user'):
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     
     try:
@@ -192,7 +194,7 @@ def create_user(username, password, role='user'):
         conn.close()
 
 def authenticate_user(username, password):
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     
     cursor.execute("SELECT id, role FROM users WHERE username = ? AND password = ?",
@@ -220,7 +222,7 @@ def get_session_id():
     return st.session_state.session_id
 
 def save_visitor_data(session_id, name=None, email=None, phone=None, city=None, project_interest=None):
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''INSERT OR REPLACE INTO visitors (session_id, name, email, phone, city, project_interest, visit_time)
                      VALUES (?, ?, ?, ?, ?, ?, ?)''', 
@@ -229,7 +231,7 @@ def save_visitor_data(session_id, name=None, email=None, phone=None, city=None, 
     conn.close()
 
 def save_chat_message(session_id, message, response, message_type="user"):
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''INSERT INTO chat_conversations (session_id, message, response, message_type)
                      VALUES (?, ?, ?, ?)''', (session_id, message, response, message_type))
@@ -238,7 +240,6 @@ def save_chat_message(session_id, message, response, message_type="user"):
 
 def send_email(to_email, subject, body, email_type="greeting"):
     if not EMAIL_CONFIG.get('enabled', False):
-        st.warning("📧 Email sending is disabled.")
         log_email_attempt(to_email, subject, body, email_type, "disabled")
         return False
     
@@ -258,13 +259,12 @@ def send_email(to_email, subject, body, email_type="greeting"):
         log_email_attempt(to_email, subject, body, email_type, "sent")
         return True
     except Exception as e:
-        st.error(f"📧 Email sending failed: {str(e)}")
         log_email_attempt(to_email, subject, body, email_type, f"error: {str(e)}")
         return False
 
 def log_email_attempt(to_email, subject, body, email_type, status):
     try:
-        conn = sqlite3.connect('ai_service_agent.db')
+        conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('''INSERT INTO email_campaigns (visitor_id, email_type, subject, content, status, recipient_email)
                          VALUES (?, ?, ?, ?, ?, ?)''', (0, email_type, subject, body, status, to_email))
@@ -288,7 +288,7 @@ def test_email_connection():
         return False, f"Connection failed: {str(e)}"
 
 def update_analytics():
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     cursor = conn.cursor()
     today = datetime.now().date()
     
@@ -302,30 +302,36 @@ def update_analytics():
     conn.close()
 
 # -----------------------------
-# Scrape Website Text
+# Optimized Scraping with Threading
 # -----------------------------
+def fetch_url(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for script in soup(["script", "style", "noscript", "footer", "nav"]):
+            script.extract()
+        text = soup.get_text(separator=' ', strip=True)
+        # Clean text by removing extra whitespace
+        text = re.sub(r'\s+', ' ', text)
+        return text
+    except Exception as e:
+        return ""
+
 @st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
 def scrape_website(urls):
     all_text = ""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    for url in urls:
-        try:
-            res = requests.get(url, headers=headers, timeout=15)
-            soup = BeautifulSoup(res.text, 'html.parser')
-            for script in soup(["script", "style", "noscript", "footer", "nav"]):
-                script.extract()
-            text = soup.get_text(separator=' ', strip=True)
-            # Clean text by removing extra whitespace
-            text = re.sub(r'\s+', ' ', text)
-            all_text += text + "\n\n"
-        except Exception as e:
-            st.error(f"Error scraping {url}: {e}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_url = {executor.submit(fetch_url, url): url for url in urls}
+        for future in concurrent.futures.as_completed(future_to_url):
+            text = future.result()
+            if text:
+                all_text += text + "\n\n"
     return all_text
 
 # -----------------------------
-# Create QA Chain
+# Create QA Chain with Progress
 # -----------------------------
-@st.cache_resource(show_spinner=False)
 def create_qa_chain():
     # Scrape website content
     raw_text = scrape_website(URLS)
@@ -334,9 +340,12 @@ def create_qa_chain():
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_text(raw_text)
     
-    # Create embeddings
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vector_store = FAISS.from_texts(chunks, embeddings)
+    # Create embeddings with explicit device setting
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'},  # Explicitly set to CPU
+        encode_kwargs={'normalize_embeddings': True}
+    )
     
     # Load Groq LLM
     llm = ChatGroq(
@@ -376,14 +385,13 @@ def get_file_hash(file_content):
 
 def process_pdf(file_path):
     try:
-        # Try PyMuPDF first (faster and more reliable)
+        # Use PyMuPDF (faster and more reliable)
         loader = PyMuPDFLoader(file_path)
         docs = loader.load()
+        return docs
     except Exception as e:
-        st.warning(f"PyMuPDF failed, falling back to PyPDFLoader: {str(e)}")
-        loader = PyPDFLoader(file_path)
-        docs = loader.load()
-    return docs
+        st.error(f"Error processing PDF: {str(e)}")
+        return []
 
 def generate_session_id():
     return f"pdf_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -407,7 +415,7 @@ def setup_pdf_chat():
     # Initialize embeddings
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
-        model_kwargs={'device': 'cpu'},
+        model_kwargs={'device': 'cpu'},  # Explicitly set to CPU
         encode_kwargs={'normalize_embeddings': True}
     )
     
@@ -457,57 +465,62 @@ def setup_pdf_chat():
                                     help="Upload multiple PDFs for analysis")
     
     if uploaded_files:
-        with st.spinner("🔍 Processing and indexing documents..."):
-            documents = []
-            new_files = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        documents = []
+        new_files = []
+        
+        for i, uploaded_file in enumerate(uploaded_files):
+            file_content = uploaded_file.getvalue()
+            file_hash = get_file_hash(file_content)
             
-            for uploaded_file in uploaded_files:
-                file_content = uploaded_file.getvalue()
-                file_hash = get_file_hash(file_content)
+            status_text.text(f"Processing {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+            
+            if file_hash not in st.session_state.file_hashes:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                    temp_file.write(file_content)
+                    temp_path = temp_file.name
                 
-                if file_hash not in st.session_state.file_hashes:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-                        temp_file.write(file_content)
-                        temp_path = temp_file.name
-                    
-                    try:
-                        docs = process_pdf(temp_path)
+                try:
+                    docs = process_pdf(temp_path)
+                    if docs:
                         documents.extend(docs)
                         st.session_state.file_hashes.add(file_hash)
                         new_files.append(uploaded_file.name)
-                        os.unlink(temp_path)
-                        
-                        # Save to database
-                        conn = sqlite3.connect('ai_service_agent.db')
-                        cursor = conn.cursor()
-                        cursor.execute('''INSERT OR IGNORE INTO pdf_files (file_name, file_hash)
-                                         VALUES (?, ?)''', (uploaded_file.name, file_hash))
-                        conn.commit()
-                        conn.close()
-                    except Exception as e:
-                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
-                        continue
+                    
+                    # Save to database in background thread
+                    threading.Thread(target=save_pdf_to_db, args=(uploaded_file.name, file_hash)).start()
+                    os.unlink(temp_path)
+                except Exception as e:
+                    st.error(f"Error processing file: {str(e)}")
+                    continue
+            progress_bar.progress((i+1)/len(uploaded_files))
+        
+        if documents:
+            # Enhanced text splitting with metadata preservation
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                separators=["\n\n", "\n", ". ", " ", ""],
+                length_function=len,
+                add_start_index=True
+            )
             
-            if documents:
-                # Enhanced text splitting with metadata preservation
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    separators=["\n\n", "\n", ". ", " ", ""],
-                    length_function=len,
-                    add_start_index=True
-                )
-                
-                splits = text_splitter.split_documents(documents)
-                
-                # Create or update FAISS vector store
-                if st.session_state.vectorstore is None:
-                    st.session_state.vectorstore = FAISS.from_documents(splits, embedding=embeddings)
-                else:
-                    st.session_state.vectorstore.add_documents(splits)
-                
-                st.success(f"✅ Processed {len(documents)} pages from {len(new_files)} new files")
-                st.session_state.processed_files.update(new_files)
+            status_text.text("Splitting documents...")
+            splits = text_splitter.split_documents(documents)
+            
+            # Create or update FAISS vector store
+            status_text.text("Creating vector store...")
+            if st.session_state.vectorstore is None:
+                st.session_state.vectorstore = FAISS.from_documents(splits, embedding=embeddings)
+            else:
+                st.session_state.vectorstore.add_documents(splits)
+            
+            st.success(f"✅ Processed {len(documents)} pages from {len(new_files)} new files")
+            st.session_state.processed_files.update(new_files)
+        
+        progress_bar.empty()
+        status_text.empty()
     
     # Session management
     col1, col2 = st.columns(2)
@@ -716,7 +729,7 @@ def setup_pdf_chat():
 
         except Exception as e:
             st.error(f"Error initializing Groq client: {str(e)}")
-    elif not os.environ["GROQ_API_KEY"]:
+    elif not os.environ.get("GROQ_API_KEY"):
         st.error("Please configure your GROQ_API_KEY in Streamlit secrets")
     else:
         st.info("Upload PDF documents to begin analysis. The system will process and index them for searching.")
@@ -737,13 +750,21 @@ def setup_pdf_chat():
         else:
             st.info("No documents currently processed")
 
+def save_pdf_to_db(file_name, file_hash):
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('''INSERT OR IGNORE INTO pdf_files (file_name, file_hash)
+                     VALUES (?, ?)''', (file_name, file_hash))
+    conn.commit()
+    conn.close()
+
 # -----------------------------
 # Videos & Tutorials Page
 # -----------------------------
 def videos_tutorials_page():
     st.markdown('<div class="main-header"><h1>Videos & Tutorials</h1></div>', unsafe_allow_html=True)
     
-    conn = sqlite3.connect('ai_service_agent.db')
+    conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
     
     # Admin panel for adding videos
     if st.session_state.user_role == 'admin':
@@ -827,6 +848,56 @@ def videos_tutorials_page():
         st.info("No videos available yet. Check back soon!")
     
     conn.close()
+
+# -----------------------------
+# Email Functions
+# -----------------------------
+def send_welcome_email(email, name, project_type):
+    welcome_subject = f"Welcome to Proengage.AI, {name}!"
+    welcome_body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #667eea;">Welcome to Proengage.AI, {name}!</h2>
+            <p>Thank you for your interest in our AI and digital solutions!</p>
+            <p>We specialize in:</p>
+            <ul>
+                <li>🤖 Custom AI Solutions & Chatbots</li>
+                <li>🌐 Web & Mobile Development</li>
+                <li>📊 Data Analytics & Machine Learning</li>
+                <li>☁️ Cloud Services & Automation</li>
+                <li>📱 Digital Marketing Solutions</li>
+                <li>🏢 Enterprise Business Solutions</li>
+            </ul>
+            <p>Our team will reach out to you shortly to discuss your {project_type.lower()} project requirements.</p>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Quick Connect:</strong></p>
+                <p>📧 Email: contact@proengage.ai</p>
+                <p>📞 Phone: +91-9876543210</p>
+                <p>🌐 Website: https://www.proengage.ai</p>
+            </div>
+            <p>Best regards,<br><strong>Proengage.AI Team</strong></p>
+        </div>
+    </body>
+    </html>
+    """
+    send_email(email, welcome_subject, welcome_body, "welcome")
+
+def send_followup_email(lead):
+    subject = f"Following up on your inquiry, {lead['name']}"
+    body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif;">
+        <h2>Hi {lead['name']},</h2>
+        <p>I hope this email finds you well!</p>
+        <p>I wanted to follow up on your recent inquiry about our {lead['project_interest']} services at Proengage.AI.</p>
+        <p>We're here to help and would love to discuss how we can assist with your project.</p>
+        <p>Would you be available for a quick call this week?</p>
+        <p>Best regards,<br>Proengage.AI Team</p>
+    </body>
+    </html>
+    """
+    send_email(lead['email'], subject, body, "follow_up")
 
 # -----------------------------
 # Authentication Page
@@ -1213,10 +1284,9 @@ else:
             email = st.text_input("Email *", value=st.session_state.visitor_info.get('email', ''))
             phone = st.text_input("Phone *", value=st.session_state.visitor_info.get('phone', ''))
             city = st.selectbox("City *", [
-    "", "London", "Manchester", "Birmingham", "Glasgow", "Liverpool",
-    "Edinburgh", "Leeds", "Bristol", "Sheffield", "Other"
-], index=0)
-
+                "", "London", "Manchester", "Birmingham", "Glasgow", "Liverpool",
+                "Edinburgh", "Leeds", "Bristol", "Sheffield", "Other"
+            ], index=0)
             
             project_type = st.selectbox("Project Interest", [
                 "AI Solutions", "Web Development", "Mobile App", 
@@ -1237,44 +1307,11 @@ else:
                         st.error(error)
                 else:
                     st.session_state.visitor_info = {'name': name, 'email': email, 'phone': phone, 'city': city}
-                    save_visitor_data(session_id, name, email, phone, city, project_type)
+                    threading.Thread(target=save_visitor_data, args=(session_id, name, email, phone, city, project_type)).start()
                     
-                    # Send welcome email
-                    welcome_subject = f"Welcome to Proengage.AI, {name}!"
-                    welcome_body = f"""
-                    <html>
-                    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                            <h2 style="color: #667eea;">Welcome to Proengage.AI, {name}!</h2>
-                            <p>Thank you for your interest in our AI and digital solutions!</p>
-                            <p>We specialize in:</p>
-                            <ul>
-                                <li>🤖 Custom AI Solutions & Chatbots</li>
-                                <li>🌐 Web & Mobile Development</li>
-                                <li>📊 Data Analytics & Machine Learning</li>
-                                <li>☁️ Cloud Services & Automation</li>
-                                <li>📱 Digital Marketing Solutions</li>
-                                <li>🏢 Enterprise Business Solutions</li>
-                            </ul>
-                            <p>Our team will reach out to you shortly to discuss your {project_type.lower()} project requirements.</p>
-                            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                                <p><strong>Quick Connect:</strong></p>
-                                <p>📧 Email: contact@proengage.ai</p>
-                                <p>📞 Phone: +91-9876543210</p>
-                                <p>🌐 Website: https://www.proengage.ai</p>
-                            </div>
-                            <p>Best regards,<br><strong>Proengage.AI Team</strong></p>
-                        </div>
-                    </body>
-                    </html>
-                    """
-                    
-                    if send_email(email, welcome_subject, welcome_body, "welcome"):
-                        st.success("✅ Information saved! Welcome email sent.")
-                    else:
-                        st.success("✅ Information saved successfully!")
-                    
-                    update_analytics()
+                    # Send welcome email in background
+                    threading.Thread(target=send_welcome_email, args=(email, name, project_type)).start()
+                    st.success("✅ Information saved! Welcome email sent.")
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -1293,8 +1330,11 @@ else:
         
         # Initialize QA chain
         if 'qa_chain' not in st.session_state:
-            with st.spinner("🔍 Loading AI knowledge base..."):
-                st.session_state.qa_chain = create_qa_chain()
+            with st.spinner("Initializing AI assistant..."):
+                try:
+                    st.session_state.qa_chain = create_qa_chain()
+                except Exception as e:
+                    st.error(f"Failed to initialize AI assistant: {str(e)}")
         
         # Display chat history directly without container
         for chat in st.session_state.chat_history:
@@ -1308,37 +1348,36 @@ else:
         
         col_send, col_clear = st.columns([1, 1])
         with col_send:
-            if st.button("Send Message", type="primary", use_container_width=True):
-                if user_message:
-                    # Add user message
-                    st.session_state.chat_history.append({
-                        'type': 'user',
-                        'message': user_message,
-                        'timestamp': datetime.now()
-                    })
-                    
-                    # Get AI response
-                    with st.spinner("🤖 Thinking..."):
-                        try:
-                            result = st.session_state.qa_chain(user_message)
-                            ai_response = result["result"]
-                            
-                            # Format response with bullet points if appropriate
-                            if ":" in ai_response or "- " in ai_response:
-                                ai_response = ai_response.replace("\n", "<br>")
-                        except Exception as e:
-                            ai_response = f"I'm sorry, I encountered an error. Please try again. ({str(e)})"
-                    
-                    # Add AI response
-                    st.session_state.chat_history.append({
-                        'type': 'bot',
-                        'message': ai_response,
-                        'timestamp': datetime.now()
-                    })
-                    
-                    # Save to database
-                    save_chat_message(session_id, user_message, ai_response)
-                    st.rerun()
+            if st.button("Send Message", type="primary", use_container_width=True) and user_message:
+                # Add user message
+                st.session_state.chat_history.append({
+                    'type': 'user',
+                    'message': user_message,
+                    'timestamp': datetime.now()
+                })
+                
+                # Get AI response
+                with st.spinner("🤖 Thinking..."):
+                    try:
+                        result = st.session_state.qa_chain(user_message)
+                        ai_response = result["result"]
+                        
+                        # Format response with bullet points if appropriate
+                        if ":" in ai_response or "- " in ai_response:
+                            ai_response = ai_response.replace("\n", "<br>")
+                    except Exception as e:
+                        ai_response = f"I'm sorry, I encountered an error. Please try again. ({str(e)})"
+                
+                # Add AI response
+                st.session_state.chat_history.append({
+                    'type': 'bot',
+                    'message': ai_response,
+                    'timestamp': datetime.now()
+                })
+                
+                # Save to database in background
+                threading.Thread(target=save_chat_message, args=(session_id, user_message, ai_response)).start()
+                st.rerun()
         
         with col_clear:
             if st.button("Clear Chat", use_container_width=True):
@@ -1350,9 +1389,9 @@ else:
     # -----------------------------
     elif page == "📊 Analytics Dashboard" and st.session_state.user_role == 'admin':
         st.markdown('<div class="main-header"><h1>Analytics Dashboard</h1></div>', unsafe_allow_html=True)
-        update_analytics()
+        threading.Thread(target=update_analytics).start()
         
-        conn = sqlite3.connect('ai_service_agent.db')
+        conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
         
         col1, col2, col3 = st.columns(3)
         
@@ -1439,7 +1478,7 @@ else:
     elif page == "👥 Lead Management" and st.session_state.user_role == 'admin':
         st.markdown('<div class="main-header"><h1>Lead Management</h1></div>', unsafe_allow_html=True)
         
-        conn = sqlite3.connect('ai_service_agent.db')
+        conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
         
         # Lead filters
         col1, col2, col3 = st.columns(3)
@@ -1522,24 +1561,8 @@ else:
                             st.rerun()
                         
                         if st.button(f"Send Follow-up Email", key=f"email_{lead['id']}"):
-                            subject = f"Following up on your inquiry, {lead['name']}"
-                            body = f"""
-                            <html>
-                            <body style="font-family: Arial, sans-serif;">
-                                <h2>Hi {lead['name']},</h2>
-                                <p>I hope this email finds you well!</p>
-                                <p>I wanted to follow up on your recent inquiry about our {lead['project_interest']} services at Proengage.AI.</p>
-                                <p>We're here to help and would love to discuss how we can assist with your project.</p>
-                                <p>Would you be available for a quick call this week?</p>
-                                <p>Best regards,<br>Proengage.AI Team</p>
-                            </body>
-                            </html>
-                            """
-                            
-                            if send_email(lead['email'], subject, body, "follow_up"):
-                                st.success("Follow-up email sent!")
-                            else:
-                                st.error("Failed to send email")
+                            threading.Thread(target=send_followup_email, args=(lead,)).start()
+                            st.info("Follow-up email sent!")
         else:
             st.info("No leads found matching your criteria")
         
@@ -1557,7 +1580,7 @@ else:
             st.markdown('<div class="section-title"><h3>📤 Send Email Campaign</h3></div>', unsafe_allow_html=True)
             
             # Get all leads
-            conn = sqlite3.connect('ai_service_agent.db')
+            conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
             leads_df = pd.read_sql_query("SELECT name, email, project_interest FROM visitors WHERE email IS NOT NULL", conn)
             
             if not leads_df.empty:
@@ -1606,6 +1629,7 @@ else:
                         if not recipients.empty:
                             success_count = 0
                             progress_bar = st.progress(0)
+                            status_text = st.empty()
                             
                             for idx, recipient in recipients.iterrows():
                                 personalized_content = email_content.replace("{name}", recipient['name'])
@@ -1613,9 +1637,12 @@ else:
                                 if send_email(recipient['email'], subject, personalized_content, campaign_type.lower()):
                                     success_count += 1
                                 
-                                progress_bar.progress((idx + 1) / len(recipients))
+                                progress = (idx + 1) / len(recipients)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Sending {idx+1}/{len(recipients)}")
                                 time.sleep(0.1)  # Small delay to prevent rate limiting
                             
+                            status_text.empty()
                             st.success(f"Campaign sent successfully to {success_count}/{len(recipients)} recipients!")
                         else:
                             st.warning("No recipients found matching your criteria")
@@ -1670,7 +1697,7 @@ else:
         with tab3:
             st.markdown('<div class="section-title"><h3>📊 Campaign History</h3></div>', unsafe_allow_html=True)
             
-            conn = sqlite3.connect('ai_service_agent.db')
+            conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
             recent_emails = pd.read_sql_query("""
                 SELECT email_type, subject, sent_time, status
                 FROM email_campaigns
@@ -1713,7 +1740,7 @@ else:
                     
                     if st.form_submit_button("Add Knowledge"):
                         if question and answer:
-                            conn = sqlite3.connect('ai_service_agent.db')
+                            conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
                             cursor = conn.cursor()
                             cursor.execute('''
                                 INSERT INTO company_data (category, question, answer, keywords)
@@ -1728,7 +1755,7 @@ else:
             
             # Display existing knowledge
             st.markdown('<div class="section-title"><h3>📚 Existing Knowledge Base</h3></div>', unsafe_allow_html=True)
-            conn = sqlite3.connect('ai_service_agent.db')
+            conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
             knowledge_df = pd.read_sql_query("SELECT * FROM company_data ORDER BY category, id", conn)
             
             if not knowledge_df.empty:
@@ -1820,7 +1847,7 @@ else:
             # Email logs
             st.markdown('<div class="section-title"><h3>📊 Recent Email Attempts</h3></div>', unsafe_allow_html=True)
             
-            conn = sqlite3.connect('ai_service_agent.db')
+            conn = sqlite3.connect('ai_service_agent.db', check_same_thread=False)
             recent_emails = pd.read_sql_query("""
                 SELECT email_type, subject, sent_time, status
                 FROM email_campaigns
@@ -1844,7 +1871,7 @@ else:
     # -----------------------------
     elif page == "📄 Document Intelligence":
         setup_pdf_chat()
-    
+
     # -----------------------------
     # Page: Videos & Tutorials
     # -----------------------------
