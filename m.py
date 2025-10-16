@@ -417,7 +417,7 @@ def setup_pdf_chat():
     
     # Model selection
     model_options = {
-        "Llama3-70b-8192": "Best quality (recommended)",
+        "llama-3.3-70b-versatile": "Best quality (recommended)",
         "Llama3-8b-8192": "Faster with good quality",
         "Mixtral-8x7b-32768": "Large context window",
         "Gemma2-9b-It": "Fastest but lower quality"
@@ -1895,4 +1895,5 @@ st.markdown("""
 # Auto-refresh for real-time updates
 if st.session_state.authenticated and st.session_state.user_role == 'admin' and st.sidebar.checkbox("Auto-refresh (30s)", False):
     time.sleep(30)
+
     st.rerun()
