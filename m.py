@@ -1,5 +1,5 @@
 # app.py (Optimized Production Version)
-# Complete Import Section - Replace lines 1-30 with this
+# Complete Import Section
 
 import streamlit as st
 import requests
@@ -21,14 +21,13 @@ from email.mime.multipart import MIMEMultipart
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-# Updated import for RetrievalQA
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.document_loaders import PyPDFLoader, PyMuPDFLoader
 import tempfile
@@ -41,9 +40,9 @@ import threading
 # Set up environment variables from Streamlit secrets
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGSMITH_API_KEY"] = st.secrets["LANGSMITH_API_KEY"]
-os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
-os.environ["HF_TOKEN"] = st.secrets["HF_TOKEN"]
+os.environ["LANGSMITH_API_KEY"] = st.secrets.get("LANGSMITH_API_KEY", "")
+os.environ["GROQ_API_KEY"] = st.secrets.get("GROQ_API_KEY", "")
+os.environ["HF_TOKEN"] = st.secrets.get("HF_TOKEN", "")
 
 # PDF Chat Constants
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
@@ -58,8 +57,8 @@ EMAIL_CONFIG = {
     "provider": "gmail",
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,
-    "email": st.secrets["EMAIL_USER"],
-    "password": st.secrets["EMAIL_PASSWORD"],
+    "email": st.secrets.get("EMAIL_USER", ""),
+    "password": st.secrets.get("EMAIL_PASSWORD", ""),
     "enabled": True
 }
 
@@ -332,7 +331,7 @@ def scrape_website(urls):
     return all_text
 
 # -----------------------------
-# Create QA Chain with Progress
+# Create QA Chain with Progress - UPDATED
 # -----------------------------
 def create_qa_chain():
     # Scrape website content
@@ -365,7 +364,9 @@ def create_qa_chain():
     Answer:
     """
     
-    PROMPT = ChatPromptTemplate.from_template(prompt_template)
+    PROMPT = PromptTemplate(
+        template=prompt_template, input_variables=["context", "question"]
+    )
     
     chain = RetrievalQA.from_chain_type(
         llm=llm,
@@ -420,9 +421,9 @@ def setup_pdf_chat():
     # Model selection
     model_options = {
         "llama-3.3-70b-versatile": "Best quality (recommended)",
-        "llama-3.3-70b-versatile": "Faster with good quality",
-        "llama-3.3-70b-versatile": "Large context window",
-        "llama-3.3-70b-versatile": "Fastest but lower quality"
+        "mixtral-8x7b-32768": "Faster with good quality",
+        "gemma2-9b-it": "Large context window",
+        "llama3-8b-8192": "Fastest but lower quality"
     }
     
     # PDF Chat UI
@@ -536,7 +537,7 @@ def setup_pdf_chat():
         try:
             # Initialize Groq with enhanced settings
             llm = ChatGroq(
-                groq_api_key=os.environ["GROQ_API_KEY"],
+                groq_api_key=os.environ.get("GROQ_API_KEY", ""),
                 model_name=selected_model,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -726,7 +727,7 @@ def setup_pdf_chat():
 
         except Exception as e:
             st.error(f"Error initializing Groq client: {str(e)}")
-    elif not os.environ["GROQ_API_KEY"]:
+    elif not os.environ.get("GROQ_API_KEY"):
         st.error("Please configure your GROQ_API_KEY in Streamlit secrets")
     else:
         st.info("Upload PDF documents to begin analysis. The system will process and index them for searching.")
@@ -1361,10 +1362,10 @@ else:
                         'timestamp': datetime.now()
                     })
                     
-                    # Get AI response
+                    # Get AI response - UPDATED
                     with st.spinner("🤖 Thinking..."):
                         try:
-                            result = st.session_state.qa_chain(user_message)
+                            result = st.session_state.qa_chain.invoke({"query": user_message})
                             ai_response = result["result"]
                             
                             # Format response with bullet points if appropriate
@@ -1897,9 +1898,4 @@ st.markdown("""
 # Auto-refresh for real-time updates
 if st.session_state.authenticated and st.session_state.user_role == 'admin' and st.sidebar.checkbox("Auto-refresh (30s)", False):
     time.sleep(30)
-
     st.rerun()
-
-
-
-
