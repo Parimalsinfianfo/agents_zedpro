@@ -44,7 +44,7 @@ os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
 os.environ["HF_TOKEN"] = st.secrets["HF_TOKEN"]
 
 # PDF Chat Constants
-DEFAULT_MODEL = "Llama3-70b-8192"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CHUNK_SIZE = 4000
 CHUNK_OVERLAP = 500
@@ -347,7 +347,7 @@ def create_qa_chain():
     # Load Groq LLM
     llm = ChatGroq(
         temperature=0.7,
-        model_name="llama3-8b-8192",
+        model_name="llama-3.3-70b-versatile",
         max_tokens=1024
     )
     
@@ -418,9 +418,9 @@ def setup_pdf_chat():
     # Model selection
     model_options = {
         "llama-3.3-70b-versatile": "Best quality (recommended)",
-        "Llama3-8b-8192": "Faster with good quality",
-        "Mixtral-8x7b-32768": "Large context window",
-        "Gemma2-9b-It": "Fastest but lower quality"
+        "llama-3.3-70b-versatile": "Faster with good quality",
+        "llama-3.3-70b-versatile": "Large context window",
+        "llama-3.3-70b-versatile": "Fastest but lower quality"
     }
     
     # PDF Chat UI
@@ -1897,3 +1897,4 @@ if st.session_state.authenticated and st.session_state.user_role == 'admin' and 
     time.sleep(30)
 
     st.rerun()
+
