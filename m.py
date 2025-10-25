@@ -21,7 +21,9 @@ from email.mime.multipart import MIMEMultipart
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain_groq import ChatGroq
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -334,48 +336,38 @@ def scrape_website(urls):
 # Create QA Chain with Progress - UPDATED
 # -----------------------------
 def create_qa_chain():
-    # Scrape website content
+    """Create QA chain using modern LangChain architecture"""
     raw_text = scrape_website(URLS)
-    
-    # Split into chunks
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_text(raw_text)
-    
-    # Create embeddings
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vector_store = FAISS.from_texts(chunks, embeddings)
+    llm = ChatGroq(temperature=0.7, model_name="llama-3.3-70b-versatile", max_tokens=1024)
     
-    # Load Groq LLM
-    llm = ChatGroq(
-        temperature=0.7,
-        model_name="llama-3.3-70b-versatile",
-        max_tokens=1024
-    )
+    # Create retriever
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
     
-    # Create retrieval-based QA chain with custom prompt
+    # Create prompt template
     prompt_template = """
     You are an AI assistant for ZedPro Digital. Provide direct, concise answers to questions about our services and company. 
     Do not use phrases like "According to the context" or "Based on the information". Just give the answer directly.
     
     Context: {context}
     
-    Question: {question}
+    Question: {input}
     
     Answer:
     """
     
-    PROMPT = PromptTemplate(
-        template=prompt_template, input_variables=["context", "question"]
-    )
+    prompt = ChatPromptTemplate.from_template(prompt_template)
     
-    chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vector_store.as_retriever(search_kwargs={"k": 3}),
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": PROMPT}
-    )
-    return chain
+    # Create document chain
+    document_chain = create_stuff_documents_chain(llm, prompt)
+    
+    # Create retrieval chain
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+    
+    return retrieval_chain
 
 # -----------------------------
 # PDF Chat Functions
@@ -1365,8 +1357,8 @@ else:
                     # Get AI response - UPDATED
                     with st.spinner("🤖 Thinking..."):
                         try:
-                            result = st.session_state.qa_chain.invoke({"query": user_message})
-                            ai_response = result["result"]
+                            result = st.session_state.qa_chain.invoke({"input": user_message})
+                            ai_response = result["answer"]
                             
                             # Format response with bullet points if appropriate
                             if ":" in ai_response or "- " in ai_response:
@@ -1899,3 +1891,4 @@ st.markdown("""
 if st.session_state.authenticated and st.session_state.user_role == 'admin' and st.sidebar.checkbox("Auto-refresh (30s)", False):
     time.sleep(30)
     st.rerun()
+
