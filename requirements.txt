@@ -8,10 +8,11 @@ langchain-community
 langchain-core
 langchain-groq
 langchain-text-splitters
-langchain_huggingface
+langchain-huggingface
 faiss-cpu
 pymupdf
 pypdf
 sentence-transformers
 python-dotenv
 tiktoken
+lxml
