@@ -1,4 +1,6 @@
 # app.py (Optimized Production Version)
+# Complete Import Section - Replace lines 1-30 with this
+
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -16,14 +18,13 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_community.vectorstores import FAISS
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -1897,4 +1898,5 @@ if st.session_state.authenticated and st.session_state.user_role == 'admin' and 
     time.sleep(30)
 
     st.rerun()
+
 
